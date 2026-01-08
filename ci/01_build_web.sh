@@ -42,16 +42,12 @@ echo "Building web archives..."
 for DIR in $WEB_PROJECTS; do
     echo "Building $DIR..."
     cd $DIR
+    . .env
     NPM=$(get_package_manager)
     $NPM install
     $NPM run build
     cd $OLDPWD
-    if [ $ENVIRONMENT = "production" ]; then
-      WAR_FILE="${APP_NAME}-${DIR}-${VERSION}.tgz"
-    else
-      echo "Non-production environment, using latest tag for web archive."
-      WAR_FILE="${APP_NAME}-${ENVIRONMENT}-${DIR}-latest.tgz"
-    fi
+    WAR_FILE="${APP_NAME}-${ENVIRONMENT}-${DIR}-latest.tgz"
     echo "Creating war file $CI_DIR/../dist/$WAR_FILE"
     mkdir -p $CI_DIR/../dist
     tar -czf $CI_DIR/../dist/$WAR_FILE -C ${DIR}/dist .

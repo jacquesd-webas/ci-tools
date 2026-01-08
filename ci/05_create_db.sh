@@ -28,38 +28,38 @@ ssh $SSH_ARGS $DEPLOY_USER@$WEB_HOST <<EOF
 cd $SITE_NAME
 
 # Load environment
-. ./env
+. .env
 
-if [ -x "\$DB_HOST" ] || [ -z "\$DB_USER" ] || [ -z "\$DB_NAME" ] || [ -z "\$DB_PASSWORD" ]; then
+DB_ROOT_USER=postgres
+
+if [ -z "\$DB_HOST" ] || [ -z "\$DB_USER" ] || [ -z "\$DB_NAME" ] || [ -z "\$DB_PASSWORD" ]; then
   echo "Error: DB_HOST, DB_USER, DB_NAME, DB_PASSWORD must be set in environment"
   exit 1
 fi
 
-DB_ROOT_USER=${DB_ROOT_USER:-postgres}
-
 # Check if DB already exists
-DB_EXIST=\$(psql -U \${DB_ROOT_USER} -lqt | cut -d \| -f 1 | grep -w ${DB_NAME} | wc -l)
+DB_EXIST=\$(psql -U \${DB_ROOT_USER} -lqt | cut -d \| -f 1 | grep -w \${DB_NAME} | wc -l)
 if [ "\$DB_EXIST" -eq "1" ]; then
-  echo "Database '${DB_NAME}' already exists. Skipping creation."
+  echo "Database '\${DB_NAME}' already exists. Skipping creation."
   exit 0
 fi
 
 # Create the DB
-echo "Creating database '${DB_NAME}' and user '${DB_USER}'..."
+echo "Creating database '\${DB_NAME}' and user '\${DB_USER}'..."
 psql -U \${DB_ROOT_USER} <<SQL
-CREATE DATABASE ${DB_NAME};
-CREATE USER ${DB_USER} WITH ENCRYPTED PASSWORD '${DB_PASSWORD}';
-GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER};
+CREATE DATABASE \${DB_NAME};
+CREATE USER \${DB_USER} WITH ENCRYPTED PASSWORD '\${DB_PASSWORD}';
+GRANT ALL PRIVILEGES ON DATABASE \${DB_NAME} TO \${DB_USER};
 SQL
 
 # Creat configured extensions
 if [ ! -z "\$DB_EXTENSIONS" ]; then
-  echo "Creating extensions in database '${DB_NAME}': \$DB_EXTENSIONS"
+  echo "Creating extensions in database '\${DB_NAME}': \$DB_EXTENSIONS"
   for EXT in \$DB_EXTENSIONS; do
     echo "Creating extension: \$EXT"
-    psql -U \${DB_ROOT_USER} -d ${DB_NAME} <<SQL
+    psql -U \${DB_ROOT_USER} -d \${DB_NAME} <<SQL
 CREATE EXTENSION IF NOT EXISTS "\$EXT";
-GRANT ALL PRIVILEGES ON EXTENSION "\$EXT" TO ${DB_USER};
+GRANT ALL PRIVILEGES ON EXTENSION "\$EXT" TO \${DB_USER};
 SQL
   done
 fi
