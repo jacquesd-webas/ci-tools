@@ -108,6 +108,20 @@ copy_dir() {
   done
 }
 
+copy_file_if_missing() {
+  src="$1"
+  dest="$2"
+  if [ -f "$dest" ]; then
+    echo "Skipping existing file: $dest"
+    return 0
+  fi
+  ensure_dir "$(dirname "$dest")"
+  sed -f "$SED_SCRIPT" "$src" > "$dest"
+  if [ -x "$src" ]; then
+    chmod +x "$dest"
+  fi
+}
+
 VARS="$(collect_vars | sort -u | tr '\n' ' ')"
 
 prompt_value "APP_NAME"
@@ -160,5 +174,8 @@ ensure_dir "$PROJECT_DIR/.github/workflows"
 copy_dir "$SCRIPT_DIR/ci" "$PROJECT_DIR/ci"
 copy_dir "$SCRIPT_DIR/env" "$PROJECT_DIR/env"
 copy_dir "$SCRIPT_DIR/github-workflows" "$PROJECT_DIR/.github/workflows"
+if [ -f "$SCRIPT_DIR/make/Makefile" ]; then
+  copy_file_if_missing "$SCRIPT_DIR/make/Makefile" "$PROJECT_DIR/Makefile"
+fi
 
-echo "Installed ci/, env/, and .github/workflows into $PROJECT_DIR"
+echo "Installed ci/, env/, .github/workflows, and Makefile into $PROJECT_DIR"

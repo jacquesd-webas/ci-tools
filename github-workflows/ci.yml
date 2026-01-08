@@ -10,7 +10,7 @@ on:
 env:
   DOCKER_IMAGES: {{__DOCKER_IMAGES__}}
   WEB_PROJECTS: {{__WEB_PROJECTS__}}
-  NODE_PROJECTS: {{__NODE_PROJECTS__}}
+  NODE_PROJECTS: {{ __NODE_PROJECTS__}}
   CI_REGISTRY_HOST: ${{ vars.CI_REGISTRY_HOST }}
   CI_REGISTRY_USER: ${{ vars.CI_REGISTRY_USER }}
   CI_REGISTRY_PAT: ${{ secrets.CI_REGISTRY_PAT }}
@@ -87,7 +87,6 @@ jobs:
           key: docker-dist-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             docker-dist-${{ runner.os }}-
-          retention-days: 1
 
       - name: Build docker images
         env:
@@ -214,7 +213,6 @@ jobs:
           key: docker-dist-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
             docker-dist-${{ runner.os }}-
-          retention-days: 1
 
       - name: Load cached docker images if present
         run: |
