@@ -1,0 +1,274 @@
+name: {{__APP_NAME__}} CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - release/*
+    tags:
+      - '*'
+
+env:
+  DOCKER_IMAGES: {{__DOCKER_IMAGES__}}
+  WEB_PROJECTS: {{__WEB_PROJECTS__}}
+  NODE_PROJECTS: {{__NODE_PROJECTS__}}
+  CI_REGISTRY_HOST: ${{ vars.CI_REGISTRY_HOST }}
+  CI_REGISTRY_USER: ${{ vars.CI_REGISTRY_USER }}
+  CI_REGISTRY_PAT: ${{ secrets.CI_REGISTRY_PAT }}
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    env:
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+      is_release_tag: ${{ steps.set-version.outputs.is_release_tag }}
+      environment: ${{ steps.set-version.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: set-version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${VERSION#v}"
+          VERSION="${VERSION#release/}"
+          if [ -z "$VERSION" ]; then
+            VERSION="latest"
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            IS_RELEASE_TAG=true
+          else
+            IS_RELEASE_TAG=false
+          fi
+
+          ENVIRONMENT="development"
+          if [[ "$VERSION" == *"-alpha"* ]]; then
+            ENVIRONMENT="development"
+          elif [[ "$VERSION" == *"-beta"* ]]; then
+            ENVIRONMENT="testing"
+          elif [[ "$IS_RELEASE_TAG" == "true" ]]; then
+            ENVIRONMENT="production"
+          fi
+
+          echo "$VERSION" > build_version.txt
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_release_tag=$IS_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENVIRONMENT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build version artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-version
+          path: build_version.txt
+
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: metadata
+    environment: ${{ needs.metadata.outputs.environment || 'development' }}
+    env:
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache dist artifacts
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: docker-dist-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            docker-dist-${{ runner.os }}-
+          retention-days: 1
+
+      - name: Build docker images
+        env:
+          COMPOSE_DOCKER_CLI_BUILD: 1
+          DOCKER_BUILDKIT: 1
+          BUILDX_CACHE_FROM: type=gha,scope=buildx
+          BUILDX_CACHE_TO: type=gha,scope=buildx,mode=max
+        run: |
+          ci/01_build_docker.sh ${{ env.DOCKER_IMAGES }}
+
+      - name: Save docker images to dist
+        env:
+          ENVIRONMENT: ${{ needs.metadata.outputs.environment }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          ci/01_save_docker.sh ${{ env.DOCKER_IMAGES }}
+
+  build-web:
+    runs-on: ubuntu-latest
+    needs: [metadata]
+    environment: ${{ needs.metadata.outputs.environment || 'development' }}
+    env:
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Determine pnpm store directory
+        id: pnpm-store
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: pnpm-store-build-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-build-${{ runner.os }}-
+
+      - name: Build web tarball
+        env:
+          ENVIRONMENT: ${{ needs.metadata.outputs.environment }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          ci/01_build_web.sh ${{ env.WEB_PROJECTS }}
+
+      - name: Cache web build output
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: web-dist-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            web-dist-${{ runner.os }}-
+
+  tests:
+    runs-on: ubuntu-latest
+    needs: [metadata, build-docker, build-web]
+    environment: ${{ needs.metadata.outputs.environment || 'development' }}
+    env:
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore buildx cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            buildx-${{ runner.os }}-
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Determine pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: pnpm-store-tests-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-tests-${{ runner.os }}-
+
+      - name: Run linter
+        env:
+          ENVIRONMENT: ${{ needs.metadata.outputs.environment }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          ci/02_test_lint.sh
+          ci/02_test_node.sh
+
+  publish-docker:
+    runs-on: ubuntu-latest
+    needs: [metadata, build-docker, tests]
+    environment: ${{ needs.metadata.outputs.environment || 'development' }}
+    env:
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore dist cache (docker images)
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: docker-dist-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            docker-dist-${{ runner.os }}-
+          retention-days: 1
+
+      - name: Load cached docker images if present
+        run: |
+          if [ -f dist/docker-images.tar ]; then
+            docker load -i dist/docker-images.tar
+          else
+            echo "No cached docker images found; skipping load."
+          fi
+
+      - name: Publish images via ci/03_publish_docker.sh
+        env:
+          ENVIRONMENT: ${{ needs.metadata.outputs.environment }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: ci/03_publish_docker.sh ${{ env.DOCKER_IMAGES }}
+
+  publish-web:
+    runs-on: ubuntu-latest
+    needs: [metadata, build-web, tests]
+    environment: ${{ needs.metadata.outputs.environment || 'development' }}
+    env:
+      WEB_STAGE_DIR: staging
+      WEB_HOST: webapps1.fringecoding.com
+      WEB_USER: webdeploy
+      DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore dist cache (web tarball)
+        uses: actions/cache@v4
+        with:
+          path: dist
+          key: web-dist-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            web-dist-${{ runner.os }}-
+
+      - name: Verify web bundle exists
+        run: |
+          ls -l dist || true
+          if ! ls dist/*.tgz >/dev/null 2>&1; then
+            echo "No cached web bundle found in dist/ (expected *.tgz)."
+            exit 1
+          fi
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Upload web bundle to staging
+        env:
+          ENVIRONMENT: ${{ needs.metadata.outputs.environment }}
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          WEB_STAGE_DIR=${WEB_STAGE_DIR} WEB_HOST=${WEB_HOST} WEB_USER=${WEB_USER} \
+            sh ./ci/03_publish_web.sh ${{ needs.metadata.outputs.version }}

@@ -1,0 +1,106 @@
+name: {{__APP_NAME__}} Swarm Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment environment
+        required: true
+        default: production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      # Environment comes from the workflow_dispatch input; defaults to "production"
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+      USE_COMPOSE: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prepare version
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            echo "Unable to determine version from ref ${GITHUB_REF}. Please trigger the workflow from the desired tag (e.g. v0.6.1)." >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Stage CI/CD Variables
+        shell: bash
+        env:
+          VARS_JSON: ${{ toJson(vars) }}
+        run: |
+          set -e
+          file="env/vars.list"
+          if [ ! -f "$file" ]; then
+            echo "::error file=$file::vars.list not found"
+            exit 1
+          fi
+          while IFS= read -r raw || [ -n "$raw" ]; do
+            line="${raw%%#*}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            val=$(printf '%s' "$VARS_JSON" | jq -r --arg k "$line" '.[$k] // empty')
+            if [ -z "$val" ]; then
+              echo "::error file=$file::Variable '$line' not set in GitHub vars"
+              exit 1
+            fi
+            echo "$line=$val" >> "$GITHUB_ENV"
+          done < "$file"
+
+      - name: Stage Secrets
+        shell: bash
+        env:
+          SECRETS_JSON: ${{ toJson(secrets) }}
+        run: |
+          set -e
+          file="env/secrets.list"
+          if [ ! -f "$file" ]; then
+            echo "::error file=$file::secrets.list not found"
+            exit 1
+          fi
+          while IFS= read -r raw || [ -n "$raw" ]; do
+            line="${raw%%#*}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "$line" ] && continue
+            val=$(printf '%s' "$SECRETS_JSON" | jq -r --arg k "$line" '.[$k] // empty')
+            if [ -z "$val" ]; then
+              echo "::error file=$file::Secret '$line' not set in GitHub secrets"
+              exit 1
+            fi
+            echo "$line=$val" >> "$GITHUB_ENV"
+          done < "$file"
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.5.3
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Push stack definition
+        run: sh ./ci/04_update_stack_def.sh stack-deploy-${{ env.ENVIRONMENT }}.yml
+
+      - name: Update Environment Configuration
+        run: sh ./ci/04_update_env.sh
+
+      - name: Create database
+        run: sh ./ci/05_create_database.sh
+
+      - name: Deploy DB Migrations
+        run: sh ./ci/05_deploy_db_migrations.sh
+
+      - name: Deploy stack on swarm
+        if: env.USE_COMPOSE != 'true'
+        run: sh ./ci/05_deploy_swarm.sh
+
+      - name: Deploy stack via docker-compose
+        if: env.USE_COMPOSE == 'true'
+        run: sh ./ci/05_deploy_compose.sh
+
+      - name: Deploy webpack
+        run: sh ./ci/05_deploy_web.sh

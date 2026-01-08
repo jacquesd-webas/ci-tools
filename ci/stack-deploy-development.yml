@@ -1,0 +1,28 @@
+version: '3'
+services:
+  api:
+    image: fringecoding/{{__APP_NAME__}}_api:${VERSION:-latest}
+    env_file:
+      - ./.env
+    ports:
+      - '8008:8000'
+    networks:
+      - {{__APP_NAME__}}
+    deploy:
+      replicas: 1
+
+  db_migrate:
+    image: fringecoding/{{__APP_NAME__}}_db_migrate:${VERSION:-latest}
+    env_file:
+      - ./.env
+    environment:
+      DB_SEED_DATA: 1
+    volumes:
+      - ./backups:/app/db/backup
+    networks:
+      - {{__APP_NAME__}}
+    deploy:
+      replicas: 0
+
+networks:
+  {{__APP_NAME__}}:
