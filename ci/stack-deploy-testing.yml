@@ -7,7 +7,7 @@ services:
     environment:
       DB_NAME: ${DB_NAME:-{{__APP_NAME__}}_test}
     ports:
-      - '3080:3030'
+      - '8000:8000'
     networks:
       - {{__APP_NAME__}}
     deploy:

@@ -5,7 +5,7 @@ services:
     env_file:
       - ./.env
     ports:
-      - '8008:8000'
+      - '8000:8000'
     networks:
       - {{__APP_NAME__}}
     deploy:
